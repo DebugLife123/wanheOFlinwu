@@ -23,6 +23,15 @@ function normalizeDateTime(input: string): string | null {
   return `${date} ${time}`;
 }
 
+function normalizeDateOnly(input: string): string | null {
+  const value = input.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+}
+
+function validOrderStatus(input: string): input is OrderStatus {
+  return input === "待出库" || input === "配送中" || input === "待安装" || input === "已完成";
+}
+
 export async function createOrder(formData: FormData) {
   const db = getDb();
   const customerName = String(formData.get("customerName") ?? "").trim();
@@ -146,6 +155,125 @@ export async function createCustomer(formData: FormData) {
   db.prepare("INSERT INTO customers (name, phone, address) VALUES (?, ?, ?)").run(name, phone, address);
   revalidatePath("/");
   return { ok: true, message: `客户 ${name} 已建档` };
+}
+
+
+export async function updateOrder(formData: FormData) {
+  const db = getDb();
+  const orderId = String(formData.get("orderId") ?? "").trim();
+  const customerName = String(formData.get("customerName") ?? "").trim();
+  const customerPhone = String(formData.get("customerPhone") ?? "").trim();
+  const customerAddress = String(formData.get("customerAddress") ?? "").trim();
+  const productId = String(formData.get("productId") ?? "").trim();
+  const quantity = Math.max(1, Number(formData.get("quantity") ?? 1) || 1);
+  const source = String(formData.get("source") ?? "门店仓").trim();
+  const needInstall = formData.get("needInstall") === "1";
+  const statusInput = String(formData.get("status") ?? "待出库");
+  const appointmentAt = normalizeDateTime(String(formData.get("appointmentAt") ?? ""));
+  const orderDate = normalizeDateOnly(String(formData.get("orderDate") ?? ""));
+  const salesperson = String(formData.get("salesperson") ?? "").trim();
+  const brand = String(formData.get("brand") ?? "").trim();
+  const collector = String(formData.get("collector") ?? "").trim();
+  const paymentMethod = String(formData.get("paymentMethod") ?? "").trim();
+  const deliveryInstall = String(formData.get("deliveryInstall") ?? "").trim();
+  const gift = String(formData.get("gift") ?? "").trim();
+  const note = String(formData.get("note") ?? "").trim();
+
+  if (!orderId) return { ok: false, message: "订单不存在" };
+  if (!customerName) return { ok: false, message: "请填写客户姓名" };
+  if (!validOrderStatus(statusInput)) return { ok: false, message: "订单状态无效" };
+  if (!orderDate) return { ok: false, message: "请填写有效的订单日期" };
+
+  const order = db.prepare(
+    `SELECT o.id, o.order_no, o.customer_id, o.status, o.source, o.need_install, o.paid_fen,
+            oi.id AS item_id, oi.product_id, oi.quantity AS old_quantity
+       FROM orders o LEFT JOIN order_items oi ON oi.order_id = o.id
+      WHERE o.id = ? ORDER BY oi.id LIMIT 1`,
+  ).get(orderId) as {
+    id: string; order_no: string; customer_id: number; status: OrderStatus; source: string;
+    need_install: number; paid_fen: number; item_id: number | null; product_id: string | null; old_quantity: number | null;
+  } | undefined;
+  if (!order) return { ok: false, message: "订单不存在" };
+  if (order.status === "已完成" && (statusInput !== "已完成" || productId !== order.product_id || quantity !== order.old_quantity || source !== order.source)) {
+    return { ok: false, message: "已完成订单不可修改商品、数量、仓库或状态" };
+  }
+
+  const product = db.prepare(
+    `SELECT id, name, price_fen, install_fee_fen FROM products WHERE id = ?`,
+  ).get(productId) as { id: string; name: string; price_fen: number; install_fee_fen: number } | undefined;
+  if (!product) return { ok: false, message: "请选择商品" };
+
+  const installFeeFen = needInstall ? product.install_fee_fen : 0;
+  const totalFen = product.price_fen * quantity + installFeeFen;
+  if (totalFen < order.paid_fen) return { ok: false, message: `订单总额不能低于已收款 ${yuanText(order.paid_fen)}` };
+
+  const run = db.transaction(() => {
+    db.prepare("UPDATE customers SET name = ?, phone = ?, address = ? WHERE id = ?")
+      .run(customerName, customerPhone, customerAddress, order.customer_id);
+    db.prepare(
+      `UPDATE orders SET status = ?, source = ?, need_install = ?, install_fee_fen = ?, total_fen = ?,
+        appointment_at = ?, note = ?, salesperson = ?, brand = ?, collector = ?, payment_method = ?,
+        delivery_install = ?, gift = ?, created_at = ?, completed_at = CASE WHEN ? = '已完成' THEN COALESCE(completed_at, datetime('now', 'localtime')) ELSE NULL END
+       WHERE id = ?`,
+    ).run(statusInput, source, needInstall ? 1 : 0, installFeeFen, totalFen, appointmentAt, note, salesperson, brand, collector, paymentMethod, deliveryInstall, gift, `${orderDate} 00:00`, statusInput, orderId);
+
+    if (order.item_id) {
+      db.prepare("UPDATE order_items SET product_id = ?, quantity = ?, unit_price_fen = ? WHERE id = ?")
+        .run(product.id, quantity, product.price_fen, order.item_id);
+    } else {
+      db.prepare("INSERT INTO order_items (order_id, product_id, quantity, unit_price_fen) VALUES (?, ?, ?, ?)")
+        .run(orderId, product.id, quantity, product.price_fen);
+    }
+
+    if (order.status !== "已完成") {
+      if (order.source !== "厂家直发") {
+        const oldWarehouse = db.prepare("SELECT id FROM warehouses WHERE name = ?").get(order.source) as { id: number } | undefined;
+        if (oldWarehouse && order.product_id && order.old_quantity) {
+          db.prepare("UPDATE inventory SET reserved = MAX(reserved - ?, 0) WHERE product_id = ? AND warehouse_id = ?")
+            .run(order.old_quantity, order.product_id, oldWarehouse.id);
+        }
+      }
+      if (source !== "厂家直发") {
+        const newWarehouse = db.prepare("SELECT id FROM warehouses WHERE name = ?").get(source) as { id: number } | undefined;
+        if (newWarehouse) {
+          db.prepare(
+            `INSERT INTO inventory (product_id, warehouse_id, reserved) VALUES (?, ?, ?)
+             ON CONFLICT (product_id, warehouse_id) DO UPDATE SET reserved = reserved + excluded.reserved`,
+          ).run(product.id, newWarehouse.id, quantity);
+        }
+      }
+    }
+
+    if (needInstall) {
+      const activeTask = db.prepare("SELECT id FROM service_tasks WHERE order_id = ? AND status NOT IN ('已完成', '已取消') LIMIT 1").get(orderId);
+      if (!activeTask) {
+        const taskId = nextTaskId(db, "安装");
+        db.prepare(
+          `INSERT INTO service_tasks (id, order_id, customer_id, type, product_label, address, assignee, appointment_at, status)
+           VALUES (?, ?, ?, '安装', ?, ?, '', ?, ?)`,
+        ).run(taskId, orderId, order.customer_id, product.name, customerAddress, appointmentAt, appointmentAt ? "已预约" : "待上门");
+      } else {
+        db.prepare("UPDATE service_tasks SET product_label = ?, address = ?, appointment_at = ? WHERE order_id = ? AND status NOT IN ('已完成', '已取消')")
+          .run(product.name, customerAddress, appointmentAt, orderId);
+      }
+    } else {
+      db.prepare("UPDATE service_tasks SET status = '已取消' WHERE order_id = ? AND status NOT IN ('已完成', '已取消')").run(orderId);
+    }
+
+    if (statusInput === "已完成" && order.status !== "已完成") {
+      db.prepare("UPDATE service_tasks SET status = '已完成' WHERE order_id = ? AND status NOT IN ('已完成', '已取消')").run(orderId);
+      if (source !== "厂家直发") {
+        const warehouse = db.prepare("SELECT id FROM warehouses WHERE name = ?").get(source) as { id: number } | undefined;
+        if (warehouse) {
+          db.prepare(`UPDATE inventory SET saleable = MAX(saleable - ?, 0), reserved = MAX(reserved - ?, 0) WHERE product_id = ? AND warehouse_id = ?`).run(quantity, quantity, product.id, warehouse.id);
+        }
+      }
+    }
+  });
+
+  run();
+  revalidatePath("/");
+  return { ok: true, message: `订单 ${order.order_no} 已保存修改` };
 }
 
 export async function advanceOrderStatus(formData: FormData) {

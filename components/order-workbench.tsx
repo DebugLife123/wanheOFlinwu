@@ -11,7 +11,7 @@ import { useMemo, useState, useTransition } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
   advanceOrderStatus, completeServiceTask, createCustomer, createOrder,
-  createServiceTask, recordPayment,
+  createServiceTask, recordPayment, updateOrder,
 } from "@/lib/actions";
 import type {
   CustomerRow, DashboardStats, InventoryRow, OrderRow, OrderStatus,
@@ -76,7 +76,7 @@ export function OrderWorkbench(data: WorkbenchData) {
     {dialog === "customer" && <NewCustomerDialog onClose={() => setDialog(null)} onNotify={notify} />}
     {dialog === "payment" && <PaymentDialog receivables={data.receivables} onClose={() => setDialog(null)} onNotify={notify} />}
     {dialog === "task" && <NewTaskDialog onClose={() => setDialog(null)} onNotify={notify} />}
-    {selectedOrder && <OrderDetailPanel order={selectedOrder} onClose={() => setSelectedOrder(null)} onNotify={notify} />}
+    {selectedOrder && <OrderDetailPanel order={selectedOrder} products={data.products} onClose={() => setSelectedOrder(null)} onNotify={notify} />}
     {searchOpen && <SearchDialog data={data} onClose={() => setSearchOpen(false)} navigate={navigate} />}
     {toast && <div className="toast" role="status"><PackageCheck aria-hidden="true" /><span>{toast}</span></div>}
   </div>;
@@ -116,29 +116,83 @@ function Dashboard({ data, navigate, onCreate, onNotify, onSelectOrder }: { data
 
 function OrdersView({ orders, onCreate, onNotify, onSelectOrder }: { orders: OrderRow[]; onCreate: () => void; onNotify: Notify; onSelectOrder: (order: OrderRow) => void }) {
   const [status, setStatus] = useState("全部");
-  const visible = status === "全部" ? orders : orders.filter((order) => order.status === status);
-  return <section className="workspace-panel reveal" style={{ "--i": 1 } as React.CSSProperties}><div className="filter-bar"><div className="segmented" role="group" aria-label="订单状态筛选">{["全部", "待出库", "配送中", "待安装", "已完成"].map((item) => <button type="button" key={item} className={status === item ? "is-selected" : ""} onClick={() => setStatus(item)}>{item}</button>)}</div></div><OrderTable orders={visible} onAdvance={(orderId) => <AdvanceButton orderId={orderId} onNotify={onNotify} />} onSelectOrder={onSelectOrder} /><div className="panel-footer"><span>共 {orders.length} 笔订单</span><button className="primary-button compact-button" type="button" onClick={onCreate}><Plus aria-hidden="true" />新建销售单</button></div></section>;
+  const [keyword, setKeyword] = useState("");
+  const [brand, setBrand] = useState("全部");
+  const [salesperson, setSalesperson] = useState("全部");
+  const [paymentMethod, setPaymentMethod] = useState("全部");
+  const [sortBy, setSortBy] = useState("date-desc");
+  const brands = useMemo(() => Array.from(new Set(orders.map((order) => order.brand).filter(Boolean))).sort(), [orders]);
+  const salespeople = useMemo(() => Array.from(new Set(orders.map((order) => order.salesperson).filter(Boolean))).sort(), [orders]);
+  const paymentMethods = useMemo(() => Array.from(new Set(orders.map((order) => order.paymentMethod).filter(Boolean))).sort(), [orders]);
+  const visible = useMemo(() => {
+    const query = keyword.trim().toLowerCase();
+    const filtered = orders.filter((order) => {
+      const matchesStatus = status === "全部" || order.status === status;
+      const matchesBrand = brand === "全部" || order.brand === brand;
+      const matchesSalesperson = salesperson === "全部" || order.salesperson === salesperson;
+      const matchesPaymentMethod = paymentMethod === "全部" || order.paymentMethod === paymentMethod;
+      const searchText = `${order.orderNo} ${order.customerName} ${order.customerPhone} ${order.customerAddress} ${order.productName} ${order.note}`.toLowerCase();
+      return matchesStatus && matchesBrand && matchesSalesperson && matchesPaymentMethod && (!query || searchText.includes(query));
+    });
+    return filtered.sort((a, b) => {
+      if (sortBy === "date-asc") return a.orderDate.localeCompare(b.orderDate);
+      if (sortBy === "amount-desc") return b.totalFen - a.totalFen;
+      if (sortBy === "amount-asc") return a.totalFen - b.totalFen;
+      if (sortBy === "balance-desc") return b.balanceFen - a.balanceFen;
+      return b.orderDate.localeCompare(a.orderDate);
+    });
+  }, [brand, keyword, orders, paymentMethod, salesperson, sortBy, status]);
+  const reset = () => { setStatus("全部"); setKeyword(""); setBrand("全部"); setSalesperson("全部"); setPaymentMethod("全部"); setSortBy("date-desc"); };
+  return <section className="workspace-panel reveal" style={{ "--i": 1 } as React.CSSProperties}>
+    <div className="order-filter-panel">
+      <div className="filter-bar order-filter-bar"><div className="segmented" role="group" aria-label="订单状态筛选">{["全部", "待出库", "配送中", "待安装", "已完成"].map((item) => <button type="button" key={item} className={status === item ? "is-selected" : ""} onClick={() => setStatus(item)}>{item}</button>)}</div><button type="button" className="text-button" onClick={reset}>重置筛选</button></div>
+      <div className="order-filter-controls"><label className="order-filter-search"><Search aria-hidden="true" /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索订单号、姓名、电话、产品或备注" /></label><label><span>品牌</span><select value={brand} onChange={(event) => setBrand(event.target.value)}><option>全部</option>{brands.map((item) => <option key={item}>{item}</option>)}</select></label><label><span>业务员</span><select value={salesperson} onChange={(event) => setSalesperson(event.target.value)}><option>全部</option>{salespeople.map((item) => <option key={item}>{item}</option>)}</select></label><label><span>收款方式</span><select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option>全部</option>{paymentMethods.map((item) => <option key={item}>{item}</option>)}</select></label><label><span>排序</span><select value={sortBy} onChange={(event) => setSortBy(event.target.value)}><option value="date-desc">日期：最新</option><option value="date-asc">日期：最早</option><option value="amount-desc">金额：从高到低</option><option value="amount-asc">金额：从低到高</option><option value="balance-desc">尾款：从高到低</option></select></label></div>
+    </div>
+    <OrderTable orders={visible} onAdvance={(orderId) => <AdvanceButton orderId={orderId} onNotify={onNotify} />} onSelectOrder={onSelectOrder} /><div className="panel-footer"><span>显示 {visible.length} / {orders.length} 笔订单</span><button className="primary-button compact-button" type="button" onClick={onCreate}><Plus aria-hidden="true" />新建销售单</button></div>
+  </section>;
 }
 
 function OrderTable({ orders, onAdvance, onSelectOrder }: { orders: OrderRow[]; onAdvance: (orderId: string) => ReactNode; onSelectOrder: (order: OrderRow) => void }) { return <div className="data-table"><div className="table-head"><span>订单 / 客户</span><span>商品</span><span>金额 / 尾款</span><span>进度</span><span>操作</span></div>{orders.map((order) => <div className="table-row order-table-row" key={order.id} onClick={() => onSelectOrder(order)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onSelectOrder(order); } }} role="button" tabIndex={0}><span className="order-id"><strong>{order.orderNo}</strong><small>{order.customerName} · {order.orderDate}</small></span><span className="product-cell"><strong>{order.productName}</strong><small>{order.deliveryInstall || order.source}</small></span><span className="money-cell"><strong>{yuan(order.totalFen)}</strong><small>{order.balanceFen === 0 ? "已收讫" : `尾款 ${yuan(order.balanceFen)}`}</small></span><span><i className={`status-badge tone-${statusTone[order.status]}`}>{order.status}</i></span><span className="row-actions"><button className="detail-button" type="button" onClick={(event) => { event.stopPropagation(); onSelectOrder(order); }}><Eye aria-hidden="true" />详情</button>{onAdvance(order.id)}</span></div>)}{orders.length === 0 && <div className="empty-state"><ClipboardList aria-hidden="true" /><strong>当前筛选没有订单</strong><span>切换状态查看其他订单。</span></div>}</div>; }
 
 
-function OrderDetailPanel({ order, onClose, onNotify }: { order: OrderRow; onClose: () => void; onNotify: Notify }) {
+function OrderDetailPanel({ order, products, onClose, onNotify }: { order: OrderRow; products: ProductOption[]; onClose: () => void; onNotify: Notify }) {
+  const [editing, setEditing] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const appointmentValue = order.appointmentAt ? order.appointmentAt.replace(" ", "T") : "";
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    form.set("orderId", order.id);
+    form.set("needInstall", form.get("deliveryInstall") === "送货+安装" ? "1" : "0");
+    startTransition(async () => {
+      const result = await updateOrder(form);
+      onNotify(result.message);
+      if (result.ok) onClose();
+    });
+  };
   return <div className="detail-overlay" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <aside className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="order-detail-title">
-      <div className="detail-drawer__header"><div><span className="eyebrow">完整订单档案</span><h2 id="order-detail-title">{order.orderNo}</h2><p>{order.customerName} · {order.orderDate}</p></div><button className="icon-button" type="button" aria-label="关闭订单详情" onClick={onClose}><X aria-hidden="true" /></button></div>
-      <div className="detail-drawer__body">
+      <div className="detail-drawer__header"><div><span className="eyebrow">完整订单档案</span><h2 id="order-detail-title">{order.orderNo}</h2><p>{order.customerName} · {order.orderDate}</p></div><div className="detail-header-actions"><button className="secondary-button compact-button" type="button" onClick={() => setEditing((value) => !value)}>{editing ? "取消编辑" : "编辑详情"}</button><button className="icon-button" type="button" aria-label="关闭订单详情" onClick={onClose}><X aria-hidden="true" /></button></div></div>
+      {editing ? <form id="order-edit-form" className="detail-drawer__body detail-edit-form" onSubmit={submit}>
+        <div className="detail-status-line"><i className={`status-badge tone-${statusTone[order.status]}`}>{order.status}</i><span>订单金额、定金和尾款由收款记录自动计算</span></div>
+        <section className="detail-money-card"><div><span>订单总额</span><strong>{yuan(order.totalFen)}</strong></div><div><span>已收定金</span><b>{yuan(order.depositFen)}</b></div><div><span>当前尾款</span><b className={order.balanceFen > 0 ? "detail-money-card__due" : ""}>{yuan(order.balanceFen)}</b></div></section>
+        <DetailFormSection title="基础信息"><div className="form-grid"><label><span>订单日期</span><input name="orderDate" type="date" defaultValue={order.orderDate} required /></label><label><span>订单状态</span><select name="status" defaultValue={order.status}><option>待出库</option><option>配送中</option><option>待安装</option><option>已完成</option></select>{order.status === "已完成" && <small>已完成订单不能回退状态</small>}</label><label><span>客户姓名</span><input name="customerName" defaultValue={order.customerName} required /></label><label><span>联系电话</span><input name="customerPhone" inputMode="tel" defaultValue={order.customerPhone} /></label><label className="full-field"><span>地址</span><input name="customerAddress" defaultValue={order.customerAddress} /></label></div></DetailFormSection>
+        <DetailFormSection title="商品与履约"><div className="form-grid"><label><span>产品名称</span><select name="productId" defaultValue={products.find((item) => item.name === order.productName.split(" × ")[0])?.id ?? products[0]?.id}>{products.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>数量</span><input name="quantity" type="number" min="1" max="99" defaultValue={order.quantity} /></label><label><span>品牌</span><input name="brand" defaultValue={order.brand} /></label><label><span>履约来源</span><select name="source" defaultValue={order.source}><option>门店仓</option><option>后仓</option><option>厂家直发</option></select></label><label><span>送货 / 安装</span><select name="deliveryInstall" defaultValue={order.deliveryInstall || (order.needInstall ? "送货+安装" : "仅送货")}><option>送货+安装</option><option>仅送货</option><option>客户自提</option><option>厂家直发</option></select></label><label><span>预约时间</span><input name="appointmentAt" type="datetime-local" defaultValue={appointmentValue} /></label><label><span>赠品</span><input name="gift" defaultValue={order.gift} /></label></div></DetailFormSection>
+        <DetailFormSection title="业务与收款"><div className="form-grid"><label><span>业务员</span><input name="salesperson" defaultValue={order.salesperson} /></label><label><span>收款人</span><input name="collector" defaultValue={order.collector} /></label><label><span>收款方式</span><select name="paymentMethod" defaultValue={order.paymentMethod || "现金"}><option>现金</option><option>微信</option><option>支付宝</option><option>银行转账</option></select></label><label className="full-field"><span>备注</span><textarea name="note" defaultValue={order.note} rows={3} /></label></div></DetailFormSection>
+      </form> : <div className="detail-drawer__body">
         <div className="detail-status-line"><i className={`status-badge tone-${statusTone[order.status]}`}>{order.status}</i><span>{order.completed ? `完结于 ${order.completedAt?.slice(0, 16) ?? order.orderDate}` : "订单仍在履约中"}</span></div>
         <section className="detail-money-card"><div><span>订单总额</span><strong>{yuan(order.totalFen)}</strong></div><div><span>定金</span><b>{yuan(order.depositFen)}</b></div><div><span>尾款</span><b className={order.balanceFen > 0 ? "detail-money-card__due" : ""}>{yuan(order.balanceFen)}</b></div></section>
-        <DetailSection title="客户信息"><DetailGrid fields={[ ["姓名", order.customerName], ["电话", order.customerPhone || "未填写"], ["地址", order.customerAddress || "未填写"] ]} /></DetailSection>
-        <DetailSection title="商品与履约"><DetailGrid fields={[ ["产品名称", order.productName], ["品牌", order.brand || "未填写"], ["送货 / 安装", order.deliveryInstall || "未填写"], ["预约时间", timeLabel(order.appointmentAt)], ["赠品", order.gift || "无"] ]} /></DetailSection>
-        <DetailSection title="业务与收款"><DetailGrid fields={[ ["业务员", order.salesperson || "未填写"], ["收款人", order.collector || "未填写"], ["收款方式", order.paymentMethod || "未填写"], ["完结", order.completed ? "是" : "否"], ["履约来源", order.source] ]} /></DetailSection>
+        <DetailSection title="客户信息"><DetailGrid fields={[["姓名", order.customerName], ["电话", order.customerPhone || "未填写"], ["地址", order.customerAddress || "未填写"]]} /></DetailSection>
+        <DetailSection title="商品与履约"><DetailGrid fields={[["产品名称", order.productName], ["品牌", order.brand || "未填写"], ["送货 / 安装", order.deliveryInstall || "未填写"], ["预约时间", timeLabel(order.appointmentAt)], ["赠品", order.gift || "无"]]} /></DetailSection>
+        <DetailSection title="业务与收款"><DetailGrid fields={[["业务员", order.salesperson || "未填写"], ["收款人", order.collector || "未填写"], ["收款方式", order.paymentMethod || "未填写"], ["完结", order.completed ? "是" : "否"], ["履约来源", order.source]]} /></DetailSection>
         <DetailSection title="备注"><div className="detail-note">{order.note || "暂无备注"}</div></DetailSection>
-      </div>
-      <div className="detail-drawer__footer"><span><ReceiptText aria-hidden="true" /> 可继续推进订单状态</span>{order.status !== "已完成" ? <AdvanceButton orderId={order.id} onNotify={(message) => { onNotify(message); onClose(); }} /> : <span className="detail-complete"><CheckCircle2 aria-hidden="true" />订单已完成</span>}</div>
+      </div>}
+      <div className="detail-drawer__footer">{editing ? <><span>修改后会同步客户、履约和订单档案</span><div className="detail-footer-actions"><button className="secondary-button" type="button" onClick={() => setEditing(false)}>取消</button><button className="primary-button" type="submit" form="order-edit-form" disabled={pending}>{pending ? "保存中…" : "保存修改"}</button></div></> : <><span><ReceiptText aria-hidden="true" /> 可继续推进订单状态</span>{order.status !== "已完成" ? <AdvanceButton orderId={order.id} onNotify={(message) => { onNotify(message); onClose(); }} /> : <span className="detail-complete"><CheckCircle2 aria-hidden="true" />订单已完成</span>}</>}</div>
     </aside>
   </div>;
 }
+
+function DetailFormSection({ title, children }: { title: string; children: ReactNode }) { return <section className="detail-section detail-form-section"><h3>{title}</h3>{children}</section>; }
 
 function DetailSection({ title, children }: { title: string; children: ReactNode }) { return <section className="detail-section"><h3>{title}</h3>{children}</section>; }
 function DetailGrid({ fields }: { fields: Array<[string, string]> }) { return <dl className="detail-grid">{fields.map(([label, value]) => <div className="detail-field" key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>; }
