@@ -22,10 +22,22 @@ export interface OrderRow {
   quantity: number;
   totalFen: number;
   paidFen: number;
+  depositFen: number;
+  balanceFen: number;
   status: OrderStatus;
   source: string;
   needInstall: boolean;
   appointmentAt: string | null;
+  orderDate: string;
+  completed: boolean;
+  completedAt: string | null;
+  deliveryInstall: string;
+  salesperson: string;
+  brand: string;
+  collector: string;
+  paymentMethod: string;
+  note: string;
+  gift: string;
   createdAt: string;
 }
 
@@ -132,12 +144,15 @@ export function listOrders(): OrderRow[] {
   const rows = db
     .prepare(
       `SELECT o.id, o.order_no, o.status, o.source, o.need_install, o.total_fen, o.paid_fen,
-              o.appointment_at, o.created_at,
+              o.appointment_at, o.created_at, o.completed_at, o.note,
+              o.salesperson, o.brand, o.collector, o.payment_method, o.delivery_install, o.gift,
               c.name AS customer_name, c.phone AS customer_phone, c.address AS customer_address,
               (SELECT GROUP_CONCAT(p.name || ' × ' || oi.quantity, '、')
                  FROM order_items oi JOIN products p ON p.id = oi.product_id
                 WHERE oi.order_id = o.id) AS product_name,
-              (SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi WHERE oi.order_id = o.id) AS quantity
+              (SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi WHERE oi.order_id = o.id) AS quantity,
+              (SELECT COALESCE(SUM(amount_fen), 0) FROM payments WHERE order_id = o.id
+                AND id = (SELECT MIN(id) FROM payments WHERE order_id = o.id)) AS deposit_fen
        FROM orders o JOIN customers c ON c.id = o.customer_id
        ORDER BY o.created_at DESC`,
     )
@@ -151,6 +166,15 @@ export function listOrders(): OrderRow[] {
     paid_fen: number;
     appointment_at: string | null;
     created_at: string;
+    completed_at: string | null;
+    note: string;
+    salesperson: string;
+    brand: string;
+    collector: string;
+    payment_method: string;
+    delivery_install: string;
+    gift: string;
+    deposit_fen: number;
     customer_name: string;
     customer_phone: string;
     customer_address: string;
@@ -167,10 +191,22 @@ export function listOrders(): OrderRow[] {
     quantity: row.quantity,
     totalFen: row.total_fen,
     paidFen: row.paid_fen,
+    depositFen: row.deposit_fen,
+    balanceFen: Math.max(row.total_fen - row.paid_fen, 0),
     status: row.status,
     source: row.source,
     needInstall: row.need_install === 1,
     appointmentAt: row.appointment_at,
+    orderDate: row.created_at.slice(0, 10),
+    completed: row.status === "已完成",
+    completedAt: row.completed_at,
+    deliveryInstall: row.delivery_install || (row.need_install === 1 ? "送货+安装" : "仅送货"),
+    salesperson: row.salesperson,
+    brand: row.brand,
+    collector: row.collector,
+    paymentMethod: row.payment_method,
+    note: row.note,
+    gift: row.gift,
     createdAt: row.created_at,
   }));
 }

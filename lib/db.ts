@@ -69,6 +69,13 @@ export function getDb(): Database.Database {
       paid_fen INTEGER NOT NULL DEFAULT 0,
       appointment_at TEXT,
       note TEXT NOT NULL DEFAULT '',
+      salesperson TEXT NOT NULL DEFAULT '',
+      brand TEXT NOT NULL DEFAULT '',
+      collector TEXT NOT NULL DEFAULT '',
+      payment_method TEXT NOT NULL DEFAULT '',
+      delivery_install TEXT NOT NULL DEFAULT '',
+      gift TEXT NOT NULL DEFAULT '',
+      completed_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
 
@@ -104,9 +111,24 @@ export function getDb(): Database.Database {
     );
   `);
 
+  ensureColumn(db, "orders", "salesperson", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "orders", "brand", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "orders", "collector", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "orders", "payment_method", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "orders", "delivery_install", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "orders", "gift", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(db, "orders", "completed_at", "TEXT");
+
   seed(db);
   globalForDb.__linwuDb = db;
   return db;
+}
+
+function ensureColumn(db: Database.Database, table: string, column: string, definition: string) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((item) => item.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
 }
 
 function seed(db: Database.Database) {

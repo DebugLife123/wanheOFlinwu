@@ -33,6 +33,11 @@ export async function createOrder(formData: FormData) {
   const source = String(formData.get("source") ?? "门店仓");
   const needInstall = formData.get("needInstall") === "1";
   const paymentMethod = String(formData.get("paymentMethod") ?? "现金");
+  const salesperson = String(formData.get("salesperson") ?? "").trim();
+  const brand = String(formData.get("brand") ?? "").trim();
+  const collector = String(formData.get("collector") ?? "").trim();
+  const deliveryInstall = String(formData.get("deliveryInstall") ?? (needInstall ? "送货+安装" : "仅送货")).trim();
+  const gift = String(formData.get("gift") ?? "").trim();
   const appointmentAt = normalizeDateTime(String(formData.get("appointmentAt") ?? ""));
   const note = String(formData.get("note") ?? "").trim();
 
@@ -74,9 +79,9 @@ export async function createOrder(formData: FormData) {
       );
 
     db.prepare(
-      `INSERT INTO orders (id, order_no, customer_id, status, source, need_install, install_fee_fen, total_fen, paid_fen, appointment_at, note)
-       VALUES (?, ?, ?, '待出库', ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(orderId, orderNo, customerId, source, needInstall ? 1 : 0, installFeeFen, totalFen, paidFen, appointmentAt, note);
+      `INSERT INTO orders (id, order_no, customer_id, status, source, need_install, install_fee_fen, total_fen, paid_fen, appointment_at, note, salesperson, brand, collector, payment_method, delivery_install, gift)
+       VALUES (?, ?, ?, '待出库', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(orderId, orderNo, customerId, source, needInstall ? 1 : 0, installFeeFen, totalFen, paidFen, appointmentAt, note, salesperson, brand, collector, paymentMethod, deliveryInstall, gift);
 
     db.prepare(
       "INSERT INTO order_items (order_id, product_id, quantity, unit_price_fen) VALUES (?, ?, ?, ?)",
@@ -160,7 +165,7 @@ export async function advanceOrderStatus(formData: FormData) {
   const nextStatus = flow[order.status];
   if (!nextStatus) return { ok: false, message: "订单已完成，无需变更" };
 
-  db.prepare("UPDATE orders SET status = ? WHERE id = ?").run(nextStatus, orderId);
+  db.prepare("UPDATE orders SET status = ?, completed_at = CASE WHEN ? = '已完成' THEN datetime('now', 'localtime') ELSE completed_at END WHERE id = ?").run(nextStatus, nextStatus, orderId);
 
   if (nextStatus === "已完成") {
     db.prepare(
@@ -269,7 +274,7 @@ export async function completeServiceTask(formData: FormData) {
 
   db.prepare("UPDATE service_tasks SET status = '已完成' WHERE id = ?").run(taskId);
   if (task.order_id) {
-    db.prepare("UPDATE orders SET status = '已完成' WHERE id = ? AND status = '待安装'").run(task.order_id);
+    db.prepare("UPDATE orders SET status = '已完成', completed_at = datetime('now', 'localtime') WHERE id = ? AND status = '待安装'").run(task.order_id);
   }
 
   revalidatePath("/");
