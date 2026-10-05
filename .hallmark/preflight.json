@@ -1,0 +1,17 @@
+{
+  "date": "2026-08-02",
+  "signals": {
+    "framework": "none before prototype setup",
+    "fontStack": null,
+    "palette": null,
+    "motion": "motion-cut",
+    "spacing": null
+  },
+  "preserve": [],
+  "introduce": [
+    "Next.js application shell",
+    "Coral design tokens",
+    "Workbench information architecture",
+    "responsive interaction states"
+  ]
+}
