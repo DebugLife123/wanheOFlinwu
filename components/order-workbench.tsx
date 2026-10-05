@@ -14,7 +14,7 @@ import {
   createServiceTask, recordPayment, updateOrder,
 } from "@/lib/actions";
 import type {
-  CustomerRow, DashboardStats, InventoryRow, OrderRow, OrderStatus,
+  CustomerRow, DashboardStats, InstallationStatus, InventoryRow, OrderRow, OrderStatus,
   PaymentRow, ProductOption, ReceivableRow, ServiceTaskRow,
 } from "@/lib/data";
 
@@ -116,6 +116,8 @@ function Dashboard({ data, navigate, onCreate, onNotify, onSelectOrder }: { data
 
 function OrdersView({ orders, onCreate, onNotify, onSelectOrder }: { orders: OrderRow[]; onCreate: () => void; onNotify: Notify; onSelectOrder: (order: OrderRow) => void }) {
   const [status, setStatus] = useState("全部");
+  const [installationStatus, setInstallationStatus] = useState<"全部" | InstallationStatus>("全部");
+  const [completionStatus, setCompletionStatus] = useState<"全部" | "已完结" | "未完结">("全部");
   const [keyword, setKeyword] = useState("");
   const [brand, setBrand] = useState("全部");
   const [salesperson, setSalesperson] = useState("全部");
@@ -128,11 +130,13 @@ function OrdersView({ orders, onCreate, onNotify, onSelectOrder }: { orders: Ord
     const query = keyword.trim().toLowerCase();
     const filtered = orders.filter((order) => {
       const matchesStatus = status === "全部" || order.status === status;
+      const matchesInstallation = installationStatus === "全部" || order.installationStatus === installationStatus;
+      const matchesCompletion = completionStatus === "全部" || (completionStatus === "已完结" ? order.completed : !order.completed);
       const matchesBrand = brand === "全部" || order.brand === brand;
       const matchesSalesperson = salesperson === "全部" || order.salesperson === salesperson;
       const matchesPaymentMethod = paymentMethod === "全部" || order.paymentMethod === paymentMethod;
       const searchText = `${order.orderNo} ${order.customerName} ${order.customerPhone} ${order.customerAddress} ${order.productName} ${order.note}`.toLowerCase();
-      return matchesStatus && matchesBrand && matchesSalesperson && matchesPaymentMethod && (!query || searchText.includes(query));
+      return matchesStatus && matchesInstallation && matchesCompletion && matchesBrand && matchesSalesperson && matchesPaymentMethod && (!query || searchText.includes(query));
     });
     return filtered.sort((a, b) => {
       if (sortBy === "date-asc") return a.orderDate.localeCompare(b.orderDate);
@@ -141,11 +145,27 @@ function OrdersView({ orders, onCreate, onNotify, onSelectOrder }: { orders: Ord
       if (sortBy === "balance-desc") return b.balanceFen - a.balanceFen;
       return b.orderDate.localeCompare(a.orderDate);
     });
-  }, [brand, keyword, orders, paymentMethod, salesperson, sortBy, status]);
-  const reset = () => { setStatus("全部"); setKeyword(""); setBrand("全部"); setSalesperson("全部"); setPaymentMethod("全部"); setSortBy("date-desc"); };
+  }, [brand, completionStatus, installationStatus, keyword, orders, paymentMethod, salesperson, sortBy, status]);
+  const reset = () => {
+    setStatus("全部");
+    setInstallationStatus("全部");
+    setCompletionStatus("全部");
+    setKeyword("");
+    setBrand("全部");
+    setSalesperson("全部");
+    setPaymentMethod("全部");
+    setSortBy("date-desc");
+  };
   return <section className="workspace-panel reveal" style={{ "--i": 1 } as React.CSSProperties}>
     <div className="order-filter-panel">
-      <div className="filter-bar order-filter-bar"><div className="segmented" role="group" aria-label="订单状态筛选">{["全部", "待出库", "配送中", "待安装", "已完成"].map((item) => <button type="button" key={item} className={status === item ? "is-selected" : ""} onClick={() => setStatus(item)}>{item}</button>)}</div><button type="button" className="text-button" onClick={reset}>重置筛选</button></div>
+      <div className="filter-bar order-filter-bar">
+        <div className="order-filter-groups">
+          <div className="order-filter-group"><span>履约进度</span><div className="segmented" role="group" aria-label="履约进度筛选">{["全部", "待出库", "配送中", "待安装", "已完成"].map((item) => <button type="button" key={item} className={status === item ? "is-selected" : ""} onClick={() => setStatus(item)}>{item}</button>)}</div></div>
+          <label className="order-filter-select"><span>安装状态</span><select value={installationStatus} onChange={(event) => setInstallationStatus(event.target.value as "全部" | InstallationStatus)}><option>全部</option><option>已安装</option><option>未安装</option><option>无需安装</option></select></label>
+          <label className="order-filter-select"><span>完结状态</span><select value={completionStatus} onChange={(event) => setCompletionStatus(event.target.value as "全部" | "已完结" | "未完结")}><option>全部</option><option>已完结</option><option>未完结</option></select></label>
+        </div>
+        <button type="button" className="text-button" onClick={reset}>重置筛选</button>
+      </div>
       <div className="order-filter-controls"><label className="order-filter-search"><Search aria-hidden="true" /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索订单号、姓名、电话、产品或备注" /></label><label><span>品牌</span><select value={brand} onChange={(event) => setBrand(event.target.value)}><option>全部</option>{brands.map((item) => <option key={item}>{item}</option>)}</select></label><label><span>业务员</span><select value={salesperson} onChange={(event) => setSalesperson(event.target.value)}><option>全部</option>{salespeople.map((item) => <option key={item}>{item}</option>)}</select></label><label><span>收款方式</span><select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option>全部</option>{paymentMethods.map((item) => <option key={item}>{item}</option>)}</select></label><label><span>排序</span><select value={sortBy} onChange={(event) => setSortBy(event.target.value)}><option value="date-desc">日期：最新</option><option value="date-asc">日期：最早</option><option value="amount-desc">金额：从高到低</option><option value="amount-asc">金额：从低到高</option><option value="balance-desc">尾款：从高到低</option></select></label></div>
     </div>
     <OrderTable orders={visible} onAdvance={(orderId) => <AdvanceButton orderId={orderId} onNotify={onNotify} />} onSelectOrder={onSelectOrder} /><div className="panel-footer"><span>显示 {visible.length} / {orders.length} 笔订单</span><button className="primary-button compact-button" type="button" onClick={onCreate}><Plus aria-hidden="true" />新建销售单</button></div>

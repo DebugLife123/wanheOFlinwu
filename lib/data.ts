@@ -1,6 +1,7 @@
 import { getDb } from "./db";
 
 export type OrderStatus = "待出库" | "配送中" | "待安装" | "已完成";
+export type InstallationStatus = "已安装" | "未安装" | "无需安装";
 
 export interface ProductOption {
   id: string;
@@ -27,6 +28,7 @@ export interface OrderRow {
   status: OrderStatus;
   source: string;
   needInstall: boolean;
+  installationStatus: InstallationStatus;
   appointmentAt: string | null;
   orderDate: string;
   completed: boolean;
@@ -196,6 +198,7 @@ export function listOrders(): OrderRow[] {
     status: row.status,
     source: row.source,
     needInstall: row.need_install === 1,
+    installationStatus: row.need_install === 0 ? "无需安装" : row.status === "已完成" ? "已安装" : "未安装",
     appointmentAt: row.appointment_at,
     orderDate: row.created_at.slice(0, 10),
     completed: row.status === "已完成",
